@@ -92,3 +92,29 @@ class ExpenseStore:
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         return [dict(row) for row in self.db.execute(sql + " ORDER BY spent_on DESC, id DESC", params)]
+
+    def update(self, expense_id, amount=None, spent_on=None, category=None, description=None):
+        old = self.get(expense_id)
+        values = validated(format_money(old["amount_cents"]) if amount is None else amount,
+                           old["spent_on"] if spent_on is None else spent_on,
+                           old["category"] if category is None else category,
+                           old["description"] if description is None else description)
+        with self.db:
+            self.db.execute("""UPDATE expenses SET amount_cents=?, spent_on=?, category=?,
+                            description=? WHERE id=?""", (*values, expense_id))
+        return self.get(expense_id)
+
+    def delete(self, expense_id):
+        row = self.get(expense_id)
+        with self.db:
+            self.db.execute("DELETE FROM expenses WHERE id=?", (expense_id,))
+        return row
+
+    def summary(self, month=None, category=None):
+        rows = self.list_expenses(month=month, category=category)
+        categories = {}
+        for row in rows:
+            categories[row["category"]] = categories.get(row["category"], 0) + row["amount_cents"]
+        return {"currency": "USD", "count": len(rows),
+                "total_cents": sum(row["amount_cents"] for row in rows),
+                "by_category_cents": dict(sorted(categories.items()))}
