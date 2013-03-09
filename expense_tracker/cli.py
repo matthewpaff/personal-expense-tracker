@@ -1,5 +1,6 @@
 """A small command interface; all output amounts use USD."""
 import argparse
+from contextlib import nullcontext
 from datetime import date
 import json
 from pathlib import Path
@@ -7,6 +8,7 @@ import sqlite3
 import sys
 
 from . import __version__
+from .csvio import read_csv, write_csv
 from .store import ExpenseStore, format_money
 
 
@@ -43,6 +45,11 @@ def parser():
             command.add_argument("--date")
             command.add_argument("--category")
             command.add_argument("--description")
+    export = commands.add_parser("export", help="Export all expenses as UTF-8 CSV")
+    export.add_argument("path", nargs="?", default="-", help="File path or - for stdout")
+    importing = commands.add_parser("import", help="Import a CSV transaction, skipping exact duplicates")
+    importing.add_argument("path", help="File path or - for stdin")
+    importing.add_argument("--allow-duplicates", action="store_true")
     return p
 
 
@@ -58,6 +65,9 @@ def display(rows):
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", newline="")
     try:
         with ExpenseStore(args.db) as store:
             if args.command == "add":
@@ -83,6 +93,20 @@ def main(argv=None):
                     print("{} expenses | Total: USD {}".format(result["count"], format_money(result["total_cents"])))
                     for category, cents in result["by_category_cents"].items():
                         print("{}: USD {}".format(category, format_money(cents)))
+            elif args.command == "export":
+                target = nullcontext(sys.stdout) if args.path == "-" else open(
+                    args.path, "w", encoding="utf-8", newline="")
+                with target as handle:
+                    count = write_csv(store, handle)
+                if args.path != "-":
+                    print("Exported {} expenses.".format(count))
+            elif args.command == "import":
+                source = nullcontext(sys.stdin) if args.path == "-" else open(
+                    args.path, "r", encoding="utf-8-sig", newline="")
+                with source as handle:
+                    rows = read_csv(handle)
+                result = store.import_rows(rows, args.allow_duplicates)
+                print("Imported {inserted}; skipped {skipped} duplicate(s).".format(**result))
         return 0
     except ValueError as error:
         print("error: " + str(error), file=sys.stderr)

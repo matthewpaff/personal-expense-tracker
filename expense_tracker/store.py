@@ -118,3 +118,19 @@ class ExpenseStore:
         return {"currency": "USD", "count": len(rows),
                 "total_cents": sum(row["amount_cents"] for row in rows),
                 "by_category_cents": dict(sorted(categories.items()))}
+
+    def import_rows(self, rows, allow_duplicates=False):
+        # Validate every row before writing; SQLite also rolls back storage failures.
+        prepared = [validated(row["amount"], row["date"], row["category"], row["description"])
+                    for row in rows]
+        inserted = skipped = 0
+        with self.db:
+            for values in prepared:
+                if not allow_duplicates and self.db.execute("""SELECT 1 FROM expenses
+                        WHERE amount_cents=? AND spent_on=? AND category=? AND description=?""", values).fetchone():
+                    skipped += 1
+                    continue
+                self.db.execute("""INSERT INTO expenses(amount_cents, spent_on, category, description)
+                                VALUES(?,?,?,?)""", values)
+                inserted += 1
+        return {"inserted": inserted, "skipped": skipped}
